@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>GeoGuessr Lite</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <style>
+    body {
+      background-color: #2f3136;
+      color: white;
+      font-family: "Segoe UI", sans-serif;
+      text-align: center;
+      margin: 0;
+      padding: 0;
+    }
+    #map {
+      height: 400px;
+      width: 90%;
+      max-width: 900px;
+      margin: 20px auto;
+      border-radius: 10px;
+      border: 2px solid #7289da;
+    }
+    .btn {
+      background-color: #7289da;
+      border: none;
+      padding: 10px 20px;
+      margin: 10px;
+      font-size: 16px;
+      border-radius: 6px;
+      color: white;
+      cursor: pointer;
+    }
+    .btn:hover {
+      background-color: #5b6eae;
+    }
+    #score {
+      margin-top: 10px;
+      font-size: 18px;
+    }
+    #pointsAnimation {
+      font-size: 28px;
+      color: #43b581;
+      font-weight: bold;
+      opacity: 0;
+      transition: all 0.5s ease-out;
+    }
+    @keyframes pop {
+      0% { opacity: 1; transform: scale(1.5); }
+      100% { opacity: 0; transform: scale(1); }
+    }
+  </style>
+</head>
+<body>
+
+<h1>GeoGuessr Lite</h1>
+<div id="map"></div>
+
+<div>
+  <button class="btn" id="startBtn">Start</button>
+  <button class="btn" id="confirmBtn" disabled>Zatwierdź</button>
+  <button class="btn" id="nextBtn" disabled>Następna runda</button>
+</div>
+
+<div id="score">Runda: 0 / 5 — Punkty: 0</div>
+<div id="pointsAnimation"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+  const maxRounds = 5;
+  let score = 0;
+  let round = 0;
+  let currentLocation = null;
+  let gameLocations = [];
+  let guessMarker = null;
+  let actualMarker = null;
+  let line = null;
+
+  const locations = [
+    {lat: 48.8566, lng: 2.3522}, {lat: 35.6895, lng: 139.6917}, {lat: 51.5074, lng: -0.1278},
+    {lat: -33.8688, lng: 151.2093}, {lat: 40.7128, lng: -74.0060}, {lat: 52.5200, lng: 13.4050},
+    {lat: 34.0522, lng: -118.2437}, {lat: -22.9068, lng: -43.1729}, {lat: 55.7558, lng: 37.6173},
+    {lat: 19.4326, lng: -99.1332}, {lat: 41.9028, lng: 12.4964}, {lat: 1.3521, lng: 103.8198},
+    {lat: 37.7749, lng: -122.4194}, {lat: 59.3293, lng: 18.0686}, {lat: 50.0755, lng: 14.4378},
+    {lat: 45.4642, lng: 9.1900}, {lat: -26.2041, lng: 28.0473}, {lat: 60.1695, lng: 24.9354},
+    {lat: 35.6762, lng: 139.6503}, {lat: 30.0444, lng: 31.2357}, {lat: 38.7223, lng: -9.1393},
+    {lat: 43.6532, lng: -79.3832}, {lat: 21.3069, lng: -157.8583}, {lat: 13.7563, lng: 100.5018},
+    {lat: 31.2304, lng: 121.4737}, {lat: -34.6037, lng: -58.3816}, {lat: 64.9631, lng: -19.0208},
+    {lat: 55.6761, lng: 12.5683}, {lat: 39.9042, lng: 116.4074}, {lat: 25.276987, lng: 55.296249}
+  ];
+
+  const map = L.map("map").setView([20, 0], 2);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: '© OpenStreetMap'
+  }).addTo(map);
+
+  map.on("click", (e) => {
+    if (!currentLocation) return;
+    if (guessMarker) map.removeLayer(guessMarker);
+    guessMarker = L.marker(e.latlng).addTo(map);
+    document.getElementById("confirmBtn").disabled = false;
+  });
+
+  function pickLocations(all, count) {
+    const copy = [...all];
+    const result = [];
+    while (result.length < count) {
+      const i = Math.floor(Math.random() * copy.length);
+      result.push(copy.splice(i, 1)[0]);
+    }
+    return result;
+  }
+
+  function openStreetView(location) {
+    const url = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${location.lat},${location.lng}`;
+    window.open(url, "_blank");
+  }
+
+  function distanceKm(lat1, lng1, lat2, lng2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  }
+
+  function getPoints(dist) {
+    if (dist < 0.1) return 5000;
+    if (dist > 2000) return 0;
+    return Math.round((1 - dist / 2000) * 5000);
+  }
+
+  function animatePoints(points) {
+    const el = document.getElementById("pointsAnimation");
+    el.textContent = `+${points} pkt`;
+    el.style.opacity = "1";
+    el.style.animation = "pop 1.5s forwards";
+    setTimeout(() => {
+      el.style.opacity = "0";
+      el.style.animation = "";
+    }, 1500);
+  }
+
+  function nextRound() {
+    if (guessMarker) map.removeLayer(guessMarker);
+    if (actualMarker) map.removeLayer(actualMarker);
+    if (line) map.removeLayer(line);
+    round++;
+    if (round > maxRounds) {
+      alert(`Koniec gry! Twój wynik: ${score} punktów.`);
+      document.getElementById("startBtn").disabled = false;
+      return;
+    }
+    currentLocation = gameLocations[round - 1];
+    openStreetView(currentLocation);
+    document.getElementById("score").textContent = `Runda: ${round} / ${maxRounds} — Punkty: ${score}`;
+    document.getElementById("confirmBtn").disabled = true;
+    document.getElementById("nextBtn").disabled = true;
+  }
+
+  document.getElementById("startBtn").addEventListener("click", () => {
+    score = 0;
+    round = 0;
+    gameLocations = pickLocations(locations, maxRounds);
+    document.getElementById("startBtn").disabled = true;
+    nextRound();
+  });
+
+  document.getElementById("confirmBtn").addEventListener("click", () => {
+    if (!guessMarker) return;
+    const guess = guessMarker.getLatLng();
+    const dist = distanceKm(guess.lat, guess.lng, currentLocation.lat, currentLocation.lng);
+    const pts = getPoints(dist);
+    score += pts;
+    animatePoints(pts);
+
+    actualMarker = L.marker(currentLocation).addTo(map);
+    line = L.polyline([guess, currentLocation], {
+      color: "#43b581",
+      weight: 3,
+      dashArray: "5, 10"
+    }).addTo(map);
+
+    map.fitBounds([guess, currentLocation], {padding: [50, 50]});
+    document.getElementById("score").textContent = `Runda: ${round} / ${maxRounds} — Punkty: ${score}`;
+    document.getElementById("nextBtn").disabled = false;
+    document.getElementById("confirmBtn").disabled = true;
+  });
+
+  document.getElementById("nextBtn").addEventListener("click", nextRound);
+</script>
+
+</body>
+</html>
